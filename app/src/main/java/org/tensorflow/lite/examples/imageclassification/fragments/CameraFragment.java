@@ -64,6 +64,7 @@ import java.util.concurrent.Executors;
 import java.io.File;
 
 import org.tensorflow.lite.examples.imageclassification.ImageClassifierHelperKotlin;
+import org.tensorflow.lite.examples.imageclassification.MainActivity;
 import org.tensorflow.lite.examples.imageclassification.R;
 import org.tensorflow.lite.examples.imageclassification.databinding.FragmentCameraBinding;
 import org.tensorflow.lite.task.vision.classifier.Classifications;
@@ -93,6 +94,7 @@ public class CameraFragment extends Fragment
     private SimpleDateFormat dateFormat;
     private String fileSeries;
     private final String throughputFileName = "Throughput_Measurements";
+    private String experimet_time;
     private Timer t;
     private Long startTime;
     private Long testStartTime;
@@ -143,6 +145,8 @@ public class CameraFragment extends Fragment
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+        MainActivity mainactivity = (MainActivity) getActivity();
+
         cameraExecutor = Executors.newSingleThreadExecutor();
 
         // Get resources
@@ -160,9 +164,10 @@ public class CameraFragment extends Fragment
                 this,
                 source,
                 0,
+                0,
                 periodOptions);
         imageClassifierHelpers = new ArrayList<>();
-        imageClassifierHelpers.add(imageClassifierHelper);
+//        imageClassifierHelpers.add(imageClassifierHelper);
 
         // setup result adapter
         classificationResultsAdapter = new ClassificationResultAdapter();
@@ -182,14 +187,15 @@ public class CameraFragment extends Fragment
 
         dateFormat = new SimpleDateFormat("HH:mm:ss");
         fileSeries = dateFormat.format(new Date());
-        String[] timeValues = fileSeries.split(":");
-        startTime = Long.parseLong(timeValues[0]) * 3600 +
-                Long.parseLong(timeValues[1]) * 60 +
-                Long.parseLong(timeValues[2]);
+        String[] timeStampSplit = fileSeries.split(":");
+        startTime = Long.parseLong(timeStampSplit[0]) * 3600 +
+                Long.parseLong(timeStampSplit[1]) * 60 +
+                Long.parseLong(timeStampSplit[2]);
+
+        assert mainactivity != null;
+        experimet_time =  mainactivity.get_exeriment_time();
         // Create file for data collection
-//        String currentFolder = Objects.requireNonNull(requireContext()
-//                .getExternalFilesDir(null)).getAbsolutePath();
-        String FILEPATH = currentFolder + File.separator + throughputFileName + startTime + ".csv";
+        String FILEPATH = currentFolder + File.separator + throughputFileName + experimet_time + ".csv";
         try (PrintWriter writer = new PrintWriter(new FileOutputStream(FILEPATH, false))) {
             String sb = "time" +
                     ',' +
@@ -301,7 +307,7 @@ public class CameraFragment extends Fragment
         // When clicked, change the underlying hardware used for inference.
         // Current options are CPU,GPU, and NNAPI
         fragmentCameraBinding.bottomSheetLayout.spinnerDelegate
-                .setSelection(0, false);
+                .setSelection(2, false);
         fragmentCameraBinding.bottomSheetLayout.spinnerDelegate
                 .setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                     @Override
@@ -330,7 +336,7 @@ public class CameraFragment extends Fragment
                                                View view,
                                                int position,
                                                long id) {
-                        imageClassifierHelper.setCurrentModel(position);
+//                        imageClassifierHelper.setCurrentModel(position);
                         updateControlsUi();
                     }
 
@@ -364,22 +370,22 @@ public class CameraFragment extends Fragment
         // in-active and vice-versa.
         fragmentCameraBinding.bottomSheetLayout.stateToggleButton
                 .setOnClickListener(view -> {
-                    imageClassifierStatus = !imageClassifierStatus;
-                    if (imageClassifierStatus) {
-                        testStartTime = SystemClock.uptimeMillis();
-                        configureImageClassifiers();
-                        source.startStream();
-                        runImageClassifiers();
-                        timedDataCollection();
-
-                    } else {
-                        synchronized (task) {
-                            t.cancel();
-                            pauseImageClassifiers();
-                            source.pauseStream();
-                        }
-                    }
-                    updateControlsUi();
+//                    imageClassifierStatus = !imageClassifierStatus;
+//                    if (imageClassifierStatus) {
+//                        testStartTime = SystemClock.uptimeMillis();
+//                        configureImageClassifiers();
+//                        source.startStream();
+//                        runImageClassifiers();
+//                        timedDataCollection();
+//
+//                    } else {
+//                        synchronized (task) {
+//                            t.cancel();
+//                            pauseImageClassifiers();
+//                            source.pauseStream();
+//                        }
+//                    }
+//                    updateControlsUi();
                 });
 
         // When clicked, configure all test models
@@ -387,10 +393,21 @@ public class CameraFragment extends Fragment
                 .setOnClickListener(view -> {
                     testStatus = !testStatus;
                     if (!testStatus) {
+                        synchronized (task) {
+                            t.cancel();
+                            pauseImageClassifiers();
+                            source.pauseStream();
+                        }
                         for (ImageClassifierHelperKotlin currClassifier : imageClassifierHelpers) {
                             currClassifier.clearImageClassifier();
                         }
                         imageClassifierHelpers.clear();
+                    }else {
+                        testStartTime = SystemClock.uptimeMillis();
+                        configureImageClassifiers();
+                        source.startStream();
+                        runImageClassifiers();
+                        timedDataCollection();
                     }
                     updateControlsUi();
                 });
@@ -520,81 +537,57 @@ public class CameraFragment extends Fragment
 
     private void configureImageClassifiers() {
         imageClassifierHelpers.clear();
-        imageClassifierHelpers.add(imageClassifierHelper);
+//        imageClassifierHelpers.add(imageClassifierHelper);
         if (testStatus) {
-//            for (int i = 0; i < 2; i++) {
-//                ImageClassifierHelperKotlin currClassifier = new ImageClassifierHelperKotlin(
-//                        requireContext(),
-//                        this,
-//                        source,
-//                        1 + i);
-//                currClassifier.setCurrentDelegate(imageClassifierHelper.getCurrentDelegateNum());
-//                currClassifier.setCurrentModel(0);
-//                currClassifier.setCurrentPeriod(imageClassifierHelper.getCurrentTaskPeriod());
-//                imageClassifierHelpers.add(currClassifier);
-//            }
-
-            // 3 - 5 - 7 = 30ms 40ms 50ms
-            // 0 - 1 - 2 = cpu, gpu, npu
-            // 0 - 1 - 2 = mobilenet, efficientnet0, efficientnet1
-            // Test 1a:
-            //        model 1 : mobilenet, cpu, 30ms
-            //        model 2 : efficientnet0, gpu, 40ms
-            //        model 3 : efficientnet1, npu, 50ms
-            // Test 1b:
-            //        model 1 : mobilenet, cpu, 50ms
-            //        model 2 : efficientnet0, gpu, 30ms
-            //        model 3 : efficientnet1, npu, 40ms
-            // Test 1c:
-            //        model 1 : mobilenet, cpu, 40ms
-            //        model 2 : efficientnet0, gpu, 50ms
-            //        model 3 : efficientnet1, npu, 30ms
-
-            // Test 2a:
-            //        model 1 : mobilenet, cpu, 30ms
-            //        model 2 : efficientnet0, gpu, 30ms
-            //        model 3 : efficientnet1, gpu, 30ms
-            // Test 2b:
-            //        model 1 : mobilenet, cpu, 40ms
-            //        model 2 : efficientnet0, npu, 40ms
-            //        model 3 : efficientnet1, npu, 40ms
-
             ImageClassifierHelperKotlin classifier1 = new ImageClassifierHelperKotlin(
                     requireContext(),
                     this,
                     source,
-                    1,
+                    0,
+                    0,
                     periodOptions);
             ImageClassifierHelperKotlin classifier2 = new ImageClassifierHelperKotlin(
                     requireContext(),
                     this,
                     source,
+                    1,
+                    1,
+                    periodOptions);
+            ImageClassifierHelperKotlin classifier3 = new ImageClassifierHelperKotlin(
+                    requireContext(),
+                    this,
+                    source,
+                    2,
                     2,
                     periodOptions);
-//            ImageClassifierHelperKotlin classifier3 = new ImageClassifierHelperKotlin(
-//                    requireContext(),
-//                    this,
-//                    source,
-//                    3);
-//
-            int mainICDelegate = imageClassifierHelper.getCurrentDelegateNum();
-            int mainICPeriod = imageClassifierHelper.getCurrentTaskPeriod();
-            String mainICDelegateName = imageClassifierHelper.getCurrentModel();
+            ImageClassifierHelperKotlin Segmenter = new ImageClassifierHelperKotlin(
+                    requireContext(),
+                    this,
+                    source,
+                    4,
+                    4,
+                    periodOptions);
+
+//            int mainICDelegate = imageClassifierHelper.getCurrentDelegateNum();
+//            int mainICPeriod = imageClassifierHelper.getCurrentTaskPeriod();
+//            String mainICDelegateName = imageClassifierHelper.getCurrentModel();
 
             classifier1.setCurrentDelegate(2);
-            classifier1.setCurrentModel(1);
-            classifier1.setCurrentPeriod(8);
+            classifier1.setCurrentPeriod(11);
 
             classifier2.setCurrentDelegate(2);
-            classifier2.setCurrentModel(2);
-            classifier2.setCurrentPeriod(8);
+            classifier2.setCurrentPeriod(11);
 
-//            classifier3.setCurrentDelegate(imageClassifierHelper.getCurrentDelegateNum());
-//            classifier3.setCurrentModel(0);
-//            classifier3.setCurrentPeriod(imageClassifierHelper.getCurrentTaskPeriod());
+            classifier3.setCurrentDelegate(2);
+            classifier3.setCurrentPeriod(11);
+
+            Segmenter.setCurrentDelegate(2);
+            Segmenter.setCurrentPeriod(11);
 
             imageClassifierHelpers.add(classifier1);
             imageClassifierHelpers.add(classifier2);
+//            imageClassifierHelpers.add(classifier3);
+            imageClassifierHelpers.add(Segmenter);
         }
 
     }
@@ -622,17 +615,17 @@ public class CameraFragment extends Fragment
                     }
                 },
                 0,
-                1000
+                500
         );
     }
 
     @SuppressLint("SimpleDateFormat")
     private void processDataCollection() {
+        long elapsedTimeMS = SystemClock.uptimeMillis() - testStartTime;
+        long elapsedTimeS = elapsedTimeMS / 1000;
+        long elapsedTimeMin = elapsedTimeS / 60;
         // Get current folder and path
-//        String
-//        = Objects.requireNonNull(requireContext()
-//                .getExternalFilesDir(null)).getAbsolutePath();
-        String FILEPATH = currentFolder + File.separator + throughputFileName + startTime + ".csv";
+        String FILEPATH = currentFolder + File.separator + throughputFileName + experimet_time + ".csv";
 
         for (ImageClassifierHelperKotlin currClassifier : imageClassifierHelpers) {
             long throughput = currClassifier.getCurrentThroughput();
@@ -662,7 +655,7 @@ public class CameraFragment extends Fragment
                         ',' +
                         avgThroughput +
                         ',' +
-                        turnAroundTime +
+                        currClassifier.getMeasuredTurnAround()+//turnAroundTime +
                         ',' +
                         idleTime +
                         ',' +
@@ -673,20 +666,31 @@ public class CameraFragment extends Fragment
                         period +
                         '\n';
                 writer.write(sb);
-                System.out.println("Writing to " + throughputFileName + " done! Models: " + imageClassifierHelpers.size());
+                System.out.println("Elapsed time(s):"+ elapsedTimeS +"  Writing to " + throughputFileName + " done! Models: " + imageClassifierHelpers.size());
             } catch (FileNotFoundException e) {
                 System.out.println(e.getMessage());
             }
+
+            if (elapsedTimeS>10*60 && elapsedTimeS<11*60 && currClassifier.getIndex()==0 && currClassifier.getCurrentTaskPeriod()==11){
+                currClassifier.setCurrentPeriod(5);
+            }
+
+            if (elapsedTimeS>20*60 && currClassifier.getIndex()==0 && currClassifier.getCurrentTaskPeriod()==5){
+                currClassifier.setCurrentPeriod(11);
+            }
+
         }
 
-        long elapsedTimeMS = SystemClock.uptimeMillis() - testStartTime;
-        long elapsedTimeS = elapsedTimeMS / 1000;
-        long elapsedTimeMin = elapsedTimeS / 60;
 
-        if (elapsedTimeMin > 4) {
-            Button toggleButton = (Button) fragmentCameraBinding.bottomSheetLayout.stateToggleButton;
+
+
+        if (elapsedTimeMin > 30) {
+            Button toggleButton = (Button) fragmentCameraBinding.bottomSheetLayout.testToggleButton;
             requireActivity().runOnUiThread(toggleButton::callOnClick);
+
         }
+
+
     }
 
     private String getRelativeTime(String currTime) {
@@ -707,13 +711,22 @@ public class CameraFragment extends Fragment
         });
     }
 
+//    @Override
+//    public void onResults(List<? extends Classifications> results, long inferenceTime, int modelIndex) {
+//        requireActivity().runOnUiThread(() -> {
+//            if (modelIndex == 0 & results != null) {
+//                classificationResultsAdapter.updateResults(results.get(0).getCategories());
+//                fragmentCameraBinding.bottomSheetLayout.inferenceTimeVal
+//                        .setText(String.format(Locale.US, "%d ms", inferenceTime));
+//            }
+//        });
+//    }
+
     @Override
-    public void onResults(List<? extends Classifications> results, long inferenceTime, int modelIndex) {
+    public void onResults( long inferenceTime, int modelIndex) {
         requireActivity().runOnUiThread(() -> {
-            if (modelIndex == 0 & results != null) {
-                classificationResultsAdapter.updateResults(results.get(0).getCategories());
-                fragmentCameraBinding.bottomSheetLayout.inferenceTimeVal
-                        .setText(String.format(Locale.US, "%d ms", inferenceTime));
+            if (modelIndex == 0) {
+
             }
         });
     }

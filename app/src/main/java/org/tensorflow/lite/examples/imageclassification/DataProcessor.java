@@ -1,11 +1,13 @@
 package org.tensorflow.lite.examples.imageclassification;
 
 import android.os.Build;
+import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -23,7 +25,6 @@ public class DataProcessor {
     String performanceFilePath;
     String rawFilePath;
     SimpleDateFormat dateFormat;
-    String fileSeries;
     String performanceFileName = "Performance_Measurements";
     String rawDataFileName = "Raw_Data";
     String[] thermalZonePaths;
@@ -35,25 +36,46 @@ public class DataProcessor {
     String rootAccess;
     long startTimeSecs;
 
+    // Logs the maximum and minimum frequency for each CPU core in GHz
+    public static void logMaxCPUFrequencies() {
+        for (int i = 0; i < 8; i++) { // Assuming 8 cores, from cpu0 to cpu7
+            String maxPath = "/sys/devices/system/cpu/cpu" + i + "/cpufreq/cpuinfo_max_freq";
+            String minPath = "/sys/devices/system/cpu/cpu" + i + "/cpufreq/cpuinfo_min_freq";
+            try {
+                String maxFreq = readFirstLineOfFile(maxPath);
+                String minFreq = readFirstLineOfFile(minPath);
+
+                float maxFreqGHz = Float.parseFloat(maxFreq) / 1000000;
+                float minFreqGHz = Float.parseFloat(minFreq) / 1000000;
+
+                Log.d("CPU", "Core " + i + " Min Freq: " + minFreqGHz + "Max Freq: " + maxFreqGHz + " GHz");
+            } catch (IOException e) {
+                Log.e("CPU", "Error reading frequency", e);
+            } catch (NumberFormatException e) {
+                Log.e("CPU", "Error parsing frequency", e);
+            }
+        }
+    }
+
+    // Helper function to read the first line of a file
+    private static String readFirstLineOfFile(String filePath) throws IOException {
+        try (BufferedReader br = new BufferedReader(new FileReader(filePath))) {
+            return br.readLine();
+        }
+    }
+
     public DataProcessor(MainActivity activity) {
+        logMaxCPUFrequencies();
+//        printDirectoryTree("/sys/class/power_supply");
+//        printDirectoryTree("/sys/class/thermal");
         mainActivity = activity;
 
         isRooted = true;
         rootAccess = "";
 
-        dateFormat = new SimpleDateFormat("HH:mm:ss");
-        fileSeries = dateFormat.format(new Date());
-        String[] timeStampSplit = fileSeries.split(":");
-        startTimeSecs = Long.parseLong(timeStampSplit[0]) * 3600 +
-                Long.parseLong(timeStampSplit[1]) * 60 +
-                Long.parseLong(timeStampSplit[2]);
-
-//        String currentFolder = mainActivity.currentFolder;
         String currentFolder = mainActivity.documentsFolder;
-        performanceFilePath = currentFolder + File.separator +
-                performanceFileName + startTimeSecs + ".csv";
-        rawFilePath = currentFolder + File.separator +
-                rawDataFileName + startTimeSecs + ".csv";
+        performanceFilePath = currentFolder + File.separator +  performanceFileName + mainActivity.get_exeriment_time() + ".csv";
+        rawFilePath = currentFolder + File.separator + rawDataFileName + mainActivity.get_exeriment_time() + ".csv";
 
         try {
             thermalZonePaths = getThermalZoneFilePaths("/sys/class/thermal");
@@ -128,6 +150,9 @@ public class DataProcessor {
                     "/sys/devices/system/cpu/cpufreq/policy4", "MID");
             cpuBigFreqHeaders = getCPUPolicyHeaders(
                     "/sys/devices/system/cpu/cpufreq/policy8", "BIG");
+            Log.d("CPU-L", "header: "+cpuLittleFreqHeaders);
+            Log.d("CPU-M", "header: "+cpuMidFreqHeaders);
+            Log.d("CPU-B", "header: "+cpuBigFreqHeaders);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -456,6 +481,7 @@ public class DataProcessor {
         while ((currFileName = reader.readLine()) != null) {
             if (currFileName.contains("thermal_zone")) {
                 String thermalZoneFilePath = thermalDir + "/" + currFileName + "/";
+
                 // Get all thermal zones and filter later
                 thermalZonePaths.add(thermalZoneFilePath);
             }
@@ -587,6 +613,40 @@ public class DataProcessor {
                 Long.parseLong(timeStampSplit[1]) * 60 +
                 Long.parseLong(timeStampSplit[2]);
         return currTimeSecs - startTimeSecs;
+    }
+
+
+
+    public void printDirectoryTree(String path) {
+        File root = new File(path);
+        if (!root.exists() || !root.isDirectory()) {
+            Log.d("DirectoryTreePrinter", "Path does not exist or is not a directory: " + path);
+            return;
+        }
+
+        printDirectoryTreeRecursive(root, 0);
+    }
+
+    private void printDirectoryTreeRecursive(File dir, int level) {
+        if (level>1){
+            return;
+        }
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            return;
+        }
+
+        StringBuilder indent = new StringBuilder();
+        for (int i = 0; i < level; i++) {
+            indent.append("   "); // 3 spaces for each level
+        }
+
+        for (File file : files) {
+            Log.d("DirectoryTreePrinter", indent.toString() + "|-- " + file.getName());
+            if (file.isDirectory()) {
+                printDirectoryTreeRecursive(file, level + 1);
+            }
+        }
     }
 
 

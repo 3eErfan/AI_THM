@@ -27,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.tensorflow.lite.examples.imageclassification.fragments.DynamicBitmapSource
+import org.tensorflow.lite.gpu.CompatibilityList
 import org.tensorflow.lite.support.image.ImageProcessor
 import org.tensorflow.lite.support.image.TensorImage
 import org.tensorflow.lite.support.image.ops.Rot90Op
@@ -34,6 +35,8 @@ import org.tensorflow.lite.task.core.BaseOptions
 import org.tensorflow.lite.task.vision.classifier.Classifications
 import org.tensorflow.lite.task.vision.classifier.ImageClassifier
 import org.tensorflow.lite.task.vision.classifier.ImageClassifier.ImageClassifierOptions
+import org.tensorflow.lite.task.vision.segmenter.ImageSegmenter
+import org.tensorflow.lite.task.vision.segmenter.OutputType
 import java.lang.IllegalStateException
 import kotlin.math.max
 
@@ -43,15 +46,17 @@ class ImageClassifierHelperKotlin(
     private val imageClassifierListener: ClassifierListener?,
     private val bitmapSource: DynamicBitmapSource?,
     private val index: Int,
+    private val currentModel: Int,
     private val periodOptions: List<String>
 ) : ViewModel() {
     var threshold: Float = 0.5f
     var numThreads: Int = 2
     var maxResults: Int = 3
     private var currentDelegate: Int = 0
-    private var currentModel: Int = 0
+//    private var currentModel: Int = 0
     private var currentThroughput: Long = 0
     private var measuredPeriod: Long = 0
+    private var measuredTurnAroundTime: Long = 0
     var currentTaskPeriod: Int = 0
     var taskPeriod: Long = 0
     private var run = false
@@ -61,10 +66,17 @@ class ImageClassifierHelperKotlin(
     private var totalMeasuredPeriod: Long = 0
     private var executionCount = 0
     private var imageClassifier: ImageClassifier? = null
+    private var imageSegmenter: ImageSegmenter? = null
 
     /** Helper class for wrapping Image Classification actions  */
     init {
-        setupImageClassifier()
+        if (currentModel== MODEL_DEEPLABV3){
+            Log.e(TAG,"SEGMENTER init")
+            setupImageSegmenter()
+        }else{
+            setupImageClassifier()
+        }
+
     }
 
     fun setCurrentDelegate(currentDelegate: Int) {
@@ -79,9 +91,9 @@ class ImageClassifierHelperKotlin(
         return delegateName
     }
 
-    fun setCurrentModel(currentModel: Int) {
-        this.currentModel = currentModel
-    }
+//    fun setCurrentModel(currentModel: Int) {
+//        this.currentModel = currentModel
+//    }
 
     fun getCurrentModel(): String {
         return this.modelName
@@ -110,6 +122,9 @@ class ImageClassifierHelperKotlin(
 
     fun getMeasuredPeriod(): Long {
         return measuredPeriod
+    }
+    fun getMeasuredTurnAround(): Long {
+        return measuredTurnAroundTime
     }
     fun getAvgMeasuredPeriod(): Long {
         return totalMeasuredPeriod / max(1, executionCount)
@@ -157,6 +172,56 @@ class ImageClassifierHelperKotlin(
         }
     }
 
+    private fun setupImageSegmenter() {
+        Log.e(TAG,"SEGMENTER setup")
+        // Create the base options for the segment
+        val optionsBuilder =
+                ImageSegmenter.ImageSegmenterOptions.builder()
+
+        // Set general segmentation options, including number of used threads
+        val baseOptionsBuilder = BaseOptions.builder().setNumThreads(numThreads)
+
+        // Use the specified hardware for running the model. Default to CPU
+        when (currentDelegate) {
+            DELEGATE_CPU -> {
+                // Default
+            }
+            DELEGATE_GPU -> {
+                if (CompatibilityList().isDelegateSupportedOnThisDevice) {
+                    baseOptionsBuilder.useGpu()
+                } else {
+                    imageClassifierListener?.onError("GPU is not supported on this device")
+                }
+            }
+            DELEGATE_NNAPI -> {
+                baseOptionsBuilder.useNnapi()
+            }
+        }
+
+        optionsBuilder.setBaseOptions(baseOptionsBuilder.build())
+
+        val modelName = modelName
+        /*
+        CATEGORY_MASK is being specifically used to predict the available objects
+        based on individual pixels in this sample. The other option available for
+        OutputType, CONFIDENCE_MAP, provides a gray scale mapping of the image
+        where each pixel has a confidence score applied to it from 0.0f to 1.0f
+         */
+        optionsBuilder.setOutputType(OutputType.CATEGORY_MASK)
+        try {
+            imageSegmenter =
+                    ImageSegmenter.createFromFileAndOptions(
+                            context,
+                            modelName,
+                            optionsBuilder.build()
+                    )
+        } catch (e: IllegalStateException) {
+            imageClassifierListener?.onError(
+                    "Image segmentation failed to initialize. See error logs for details"
+            )
+            Log.e(TAG, "TFLite failed to load model with error: " + e.message)
+        }
+    }
     private fun resetRtData() {
         executionCount = 0
         currentThroughput = 0
@@ -188,6 +253,11 @@ class ImageClassifierHelperKotlin(
 
     @Throws(InterruptedException::class)
     fun classify(image: Bitmap?, imageRotation: Int) {
+        if (currentModel == MODEL_DEEPLABV3){
+            segment(image, imageRotation)
+            return
+        }
+
         if (imageClassifier == null) {
             setupImageClassifier()
         }
@@ -217,24 +287,72 @@ class ImageClassifierHelperKotlin(
                 delay(timeLeftInPeriod)
             }
         }
-
+        measuredTurnAroundTime = turnAroundTime
         totalMeasuredPeriod += measuredPeriod
         totalTurnAroundTime += turnAroundTime
         currentThroughput = if (measuredPeriod == 0L) 0;
         else 1000 / measuredPeriod
         totalThroughputTime += currentThroughput
 
-        imageClassifierListener?.onResults(result, turnAroundTime, index)
+        imageClassifierListener?.onResults(turnAroundTime, index)
+    }
+
+    @Throws(InterruptedException::class)
+    fun segment(image: Bitmap?, imageRotation: Int) {
+
+        if (imageSegmenter == null) {
+            setupImageSegmenter()
+        }
+
+        // Create preprocessor for the image.
+        // See https://www.tensorflow.org/lite/inference_with_metadata/
+        //            lite_support#imageprocessor_architecture
+        val imageProcessor =
+                ImageProcessor.Builder()
+                        .add(Rot90Op(-imageRotation / 90))
+                        .build()
+
+        // Preprocess the image and convert it into a TensorImage for segmentation.
+        val tensorImage = imageProcessor.process(TensorImage.fromBitmap(image))
+
+        // Inference time is the difference between the system time at the start
+        // and finish of the process
+        val startTime = SystemClock.uptimeMillis()
+
+        val segmentResult = imageSegmenter?.segment(tensorImage)
+
+        // Calculate the turn around time: Made up of queue time + inference time
+        val turnAroundTime = SystemClock.uptimeMillis() - startTime
+        // Increment the total inferences executed
+        executionCount++
+
+        val timeLeftInPeriod = taskPeriod - turnAroundTime
+        measuredPeriod = if (timeLeftInPeriod >= 0) taskPeriod else turnAroundTime
+        if (timeLeftInPeriod > 0) {
+            runBlocking {
+                delay(timeLeftInPeriod)
+            }
+        }
+        measuredTurnAroundTime = turnAroundTime
+        totalMeasuredPeriod += measuredPeriod
+        totalTurnAroundTime += turnAroundTime
+        currentThroughput = if (measuredPeriod == 0L) 0;
+        else 1000 / measuredPeriod
+        totalThroughputTime += currentThroughput
+
+        imageClassifierListener?.onResults(turnAroundTime, index)
     }
 
     fun clearImageClassifier() {
         imageClassifier = null
+        imageSegmenter = null
     }
 
     /** Listener for passing results back to calling class  */
     interface ClassifierListener {
         fun onError(error: String?)
-        fun onResults(results: List<Classifications?>?, inferenceTime: Long, modelIndex: Int)
+        fun onResults(inferenceTime: Long, modelIndex: Int)
+//        fun onResults(results: List<Classifications?>?, inferenceTime: Long, modelIndex: Int)
     }
 
     private val modelName: String
@@ -244,6 +362,7 @@ class ImageClassifierHelperKotlin(
                 MODEL_EFFICIENTNETV0 -> "efficientnet-lite0.tflite"
                 MODEL_EFFICIENTNETV1 -> "efficientnet-lite1.tflite"
                 MODEL_EFFICIENTNETV2 -> "efficientnet-lite2.tflite"
+                MODEL_DEEPLABV3 -> "deeplabv3.tflite"
                 else -> "mobilenetv1.tflite"
             }
             return modelName
@@ -271,9 +390,11 @@ class ImageClassifierHelperKotlin(
         private const val DELEGATE_CPU = 0
         private const val DELEGATE_GPU = 1
         private const val DELEGATE_NNAPI = 2
+
         private const val MODEL_MOBILENETV1 = 0
         private const val MODEL_EFFICIENTNETV0 = 1
         private const val MODEL_EFFICIENTNETV1 = 2
         private const val MODEL_EFFICIENTNETV2 = 3
+        private const val MODEL_DEEPLABV3 = 4
     }
 }

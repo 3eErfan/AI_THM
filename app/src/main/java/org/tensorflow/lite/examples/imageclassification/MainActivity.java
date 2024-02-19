@@ -18,6 +18,7 @@ package org.tensorflow.lite.examples.imageclassification;
 
 import static java.lang.Runtime.getRuntime;
 
+import android.annotation.SuppressLint;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -28,6 +29,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import org.tensorflow.lite.examples.imageclassification.databinding.ActivityMainBinding;
 
 import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Objects;
 
 /*
@@ -48,8 +51,11 @@ public class MainActivity extends AppCompatActivity {
     String currentThermalStatus = "None";
     String currentFolder;
     String documentsFolder;
+    String experiment_time;
 
-
+    public String get_exeriment_time(){
+        return experiment_time;
+    }
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -62,6 +68,11 @@ public class MainActivity extends AppCompatActivity {
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException(e);
         }
+
+        @SuppressLint("SimpleDateFormat") SimpleDateFormat dateFormat = new SimpleDateFormat("HH:mm:ss");
+        String fileSeries = dateFormat.format(new Date());
+        String[] timeStampSplit = fileSeries.split(":");
+        experiment_time = "_" + timeStampSplit[0]+ "_" + timeStampSplit[1]+ "_" + timeStampSplit[2];
 
         currentFolder = Objects.requireNonNull(getExternalFilesDir(null)).getAbsolutePath();
         documentsFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).getAbsolutePath();
